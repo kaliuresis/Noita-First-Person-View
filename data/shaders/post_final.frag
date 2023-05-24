@@ -69,6 +69,8 @@ uniform vec4 cross_hair_specs; //thickness, center spacing, length
 uniform vec4 cross_hair_color; //thickness, center spacing, length
 uniform vec4 paused;
 
+uniform vec4 VIRTUAL_RESOLUTION;
+
 // -----------------------------------------------------------------------------------------------
 // utilities
 
@@ -86,7 +88,6 @@ vec4 unpack_noise( vec4 noise ) { return mix(vec4(0.5,0.5,0.5,0.5), mix(vec4(-0.
 #endif
 
 #define T time
-
 
 // trip "fractals" effect. this is based on some code from ShaderToy, which I can't find anymore.
 
@@ -155,27 +156,27 @@ vec4 cast_ray(vec2 start_pos, vec2 ray_dir, float max_dist, out float dist, out 
 
     dist = 0.0;
 
-    const float SCREEN_W = 4.0*427.0;
-    const float SCREEN_H = 4.0*242.0;
+    float width = 4.0*VIRTUAL_RESOLUTION.x;
+    float height = 4.0*VIRTUAL_RESOLUTION.y;
 
     vec4 tint = vec4(0.0, 0.0, 0.0, 1.0);
+    vec4 medium = vec4(0.0, 0.0, 0.0, 0.0);
 
     const int max_iterations = 4000;
     for(int i = 0; i < max_iterations; i++)
     {
-        sample_coord = ipos/vec2(SCREEN_W, SCREEN_H);
+        sample_coord = ipos/vec2(width, height);
         vec4 color = texture2D(tex_fg, sample_coord);
-        if(color.a > 0.0)
+        if(color.a > 0.0 && any(notEqual(medium, color)))
         {
             if(color.a == 1.0 || tint.a < 1.0/256.0)
             {
                 return vec4(tint.rgb+tint.a*color.rgb, 0.0);
             }
-            //hacky alpha curves tuned to make water and toxic sludge look ok
-            if(color.a > 0.5) color.a = pow(color.a, 2.0);
-            else color.a = 0.5*color.a;
+
             tint.rgb += color.rgb*tint.a*color.a;
             tint.a -= tint.a*color.a;
+            medium = color;
         }
 
         vec2 dists = (0.5*ray_sign+0.5+ray_sign*(ipos-pos))*invabs_dir;
@@ -226,9 +227,6 @@ void main()
 
 	const vec3 LOW_HEALTH_INDICATOR_COLOR = vec3( 0.7, 0.1, 0.0 );
 
-	const float SCREEN_W = 427.0;
-	const float SCREEN_H = 242.0;
-
 // ==========================================================================================================
 // fetch texture coords etc =================================================================================
 
@@ -274,11 +272,11 @@ void main()
 	// 	tex_coord_glow += vec2( liquid_distortion_offset.x, -liquid_distortion_offset.y );
 	// }
 
-   	vec2 pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / SCREEN_H) + vec2( gl_TexCoord[0].x, - gl_TexCoord[0].y );
+   	vec2 pos_seed = vec2(camera_pos.x / VIRTUAL_RESOLUTION.x, camera_pos.y / VIRTUAL_RESOLUTION.y) + vec2( gl_TexCoord[0].x, - gl_TexCoord[0].y );
 
 #ifdef TRIPPY
    	// trip distortion
-	pos_seed = floor(pos_seed * SCREEN_W) / SCREEN_W; // pixelate
+	pos_seed = floor(pos_seed * VIRTUAL_RESOLUTION.x) / VIRTUAL_RESOLUTION.x; // pixelate
 	vec2 perlin_noise = texture2D(tex_perlin_noise, pos_seed*0.1 + vec2(time,time)*0.01).xy - vec2(0.5,0.5);
 	perlin_noise += texture2D(tex_perlin_noise, pos_seed*0.3 + vec2(time,time)*0.005).xy - vec2(0.5,0.5);
 	float tex_coord_warped_zoom = min( 1.0, drugged_distortion_amount * 1.5 ); // zoom in a little to avoid sampling past texture edges
@@ -288,7 +286,7 @@ void main()
 	float tex_coord_warped_lerp = length(tex_coord - vec2(0.5,0.5)) * drugged_distortion_amount;
 	tex_coord = mix( tex_coord, tex_coord_warped, tex_coord_warped_lerp );
 
-   	pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / SCREEN_H) + vec2( tex_coord.x, - tex_coord.y );
+   	pos_seed = vec2(camera_pos.x / VIRTUAL_RESOLUTION.x, camera_pos.y / VIRTUAL_RESOLUTION.y) + vec2( tex_coord.x, - tex_coord.y );
 #endif
 
 // ==========================================================================================================
@@ -308,18 +306,18 @@ void main()
     float pixel_thickness = 4.0*thickness.r;
 
     vec2 screen_coord = 2.0*tex_coord - vec2(1.0);
-    screen_coord.x *= SCREEN_W/SCREEN_H;
+    screen_coord.x *= VIRTUAL_RESOLUTION.x/VIRTUAL_RESOLUTION.y;
     vec3 ray_dir_3D = normalize(camera_axes*vec3(screen_coord, screen_dist.r));
     vec2 ray_dir = normalize(ray_dir_3D.xy);
     float forward_val = length(ray_dir_3D.xy);
-    float max_dist = min(3.0*SCREEN_W, pixel_thickness*forward_val/abs(ray_dir_3D.z));
+    float max_dist = min(3.0*VIRTUAL_RESOLUTION.x, pixel_thickness*forward_val/abs(ray_dir_3D.z));
 
     vec2 bg_coord = vec2(0.5, 0.5)+vec2(atan(ray_dir_3D.x, abs(ray_dir_3D.z))*(1.0/pi), asin(ray_dir_3D.y)*(1.0/pi));
 	vec3 color_bg = texture2D(tex_bg, bg_coord).rgb;
 
     float dist = 0.0;
     vec2 sample_coord;
-    vec4 color_fg = cast_ray(2.0*vec2(SCREEN_W, SCREEN_H), ray_dir, max_dist, dist, sample_coord);
+    vec4 color_fg = cast_ray(2.0*vec2(VIRTUAL_RESOLUTION.x, VIRTUAL_RESOLUTION.y), ray_dir, max_dist, dist, sample_coord);
     color_fg.a = 1.0-color_fg.a;
 
     vec3 color = color_bg;//*(1.0-color_fg.a)+color_fg.rgb;
@@ -330,18 +328,18 @@ void main()
         vec2 doublevision_offset = vec2(0.005 * cos(time*0.5)  * drugged_doublevision_amount,0.005 * sin(time*0.5) * drugged_doublevision_amount );
 
         vec2 trip_screen_coord = 2.0*(tex_coord+doublevision_offset) - vec2(1.0);
-        trip_screen_coord.x *= SCREEN_W/SCREEN_H;
+        trip_screen_coord.x *= VIRTUAL_RESOLUTION.x/VIRTUAL_RESOLUTION.y;
         vec3 trip_ray_dir_3D = normalize(camera_axes*vec3(trip_screen_coord, screen_dist.r));
         vec2 trip_ray_dir = normalize(trip_ray_dir_3D.xy);
         float trip_forward_val = length(trip_ray_dir_3D.xy);
-        float trip_max_dist = min(3.0*SCREEN_W, pixel_thickness*trip_forward_val/abs(trip_ray_dir_3D.z));
+        float trip_max_dist = min(3.0*VIRTUAL_RESOLUTION.x, pixel_thickness*trip_forward_val/abs(trip_ray_dir_3D.z));
 
         vec2 trip_bg_coord = vec2(0.5, 0.5)+vec2(atan(trip_ray_dir_3D.x, abs(trip_ray_dir_3D.z))*(1.0/pi), asin(trip_ray_dir_3D.y)*(1.0/pi));
         vec3 trip_color_bg = texture2D(tex_bg, trip_bg_coord).rgb;
 
         float trip_dist = 0.0;
         vec2 trip_sample_coord;
-        vec4 trip_color_fg = cast_ray(2.0*vec2(SCREEN_W, SCREEN_H), trip_ray_dir, trip_max_dist, trip_dist, trip_sample_coord);
+        vec4 trip_color_fg = cast_ray(2.0*vec2(VIRTUAL_RESOLUTION.x, VIRTUAL_RESOLUTION.y), trip_ray_dir, trip_max_dist, trip_dist, trip_sample_coord);
         trip_color_fg.a = 1.0-trip_color_fg.a;
         color_fg = mix( color_fg, trip_color_fg, 0.5 );
         color = mix( color, trip_color_bg, 0.5 );
@@ -392,7 +390,7 @@ void main()
 		vec2 perlin_noise_static = texture2D(tex_perlin_noise, pos_seed*0.1+ vec2(time,time)*0.0001 ).xy - vec2(0.5,0.5);
 
 		float fractals_alpha = sqrt( (color_fg.r + color_fg.g + color_fg.b) * 0.333 ) * 2.0;
-		pos_seed = floor(pos_seed * SCREEN_W) / SCREEN_W; // pixelate
+		pos_seed = floor(pos_seed * VIRTUAL_RESOLUTION.x) / VIRTUAL_RESOLUTION.x; // pixelate
 		pos_seed += perlin_noise * 0.01; // moving wave distortion
 		pos_seed += perlin_noise_static * 0.15; // static wave distortion
 
@@ -558,7 +556,7 @@ void main()
 // ==========================================================================================================
 // nightvision ==============================================================================================
 
-    float edge_dist = dist*(0.5/SCREEN_H);
+    float edge_dist = dist*(0.5/VIRTUAL_RESOLUTION.y);
     color = mix( color, overlay_color_blindness.rgb, overlay_color_blindness.a * 0.5 + overlay_color_blindness.a * 40.0);
 
     float screen_edge_dist = length(tex_coord - vec2(0.5)) * 2.0;
@@ -660,7 +658,7 @@ void main()
     vec3 aim_proj = aim_raw.xyz*camera_axes;
     aim_proj *= screen_dist.r/aim_proj.z;
     if(paused.r > 0.5) aim_proj = vec3(1.4, 0.0, 0.0);
-    vec2 ray_dir_rel = (screen_coord-aim_proj.xy)*SCREEN_H;
+    vec2 ray_dir_rel = (screen_coord-aim_proj.xy)*VIRTUAL_RESOLUTION.y;
 
     if((abs(ray_dir_rel.x) < cross_hair_specs.r
         && abs(ray_dir_rel.y) >= cross_hair_specs.g && abs(ray_dir_rel.y) < cross_hair_specs.g+cross_hair_specs.b)

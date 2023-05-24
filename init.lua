@@ -4,6 +4,13 @@ base_dir = "mods/"..mod_id.."/"
 dofile_once("data/scripts/lib/utilities.lua");
 local nxml = dofile_once(base_dir.."lib/nxml.lua")
 
+-- local VIRTUAL_RESOLUTION_SCALE = tonumber(ModSettingGetNextValue(mod_id..".VIRTUAL_RESOLUTION_SCALE")) or 1.0
+-- ModTextFileSetContent(base_dir.."files/magic_numbers.xml",
+--                       string.format("<MagicNumbers VIRTUAL_RESOLUTION_X = \"%d\" VIRTUAL_RESOLUTION_Y = \"%d\"/>",
+--                                     math.floor(VIRTUAL_RESOLUTION_SCALE*427.0),
+--                                     math.floor(VIRTUAL_RESOLUTION_SCALE*242.0)))
+-- ModMagicNumbersFileAdd(base_dir.."files/magic_numbers.xml")
+
 function OnWorldInitialized()
     local fov = (ModSettingGet(mod_id..".fov") or 120)*math.pi/180
     local screen_dist = 1.0/math.tan(fov/2.0)
@@ -24,6 +31,11 @@ function OnWorldInitialized()
                            ModSettingGetNextValue(mod_id..".crosshair_b") or 1,
                            ModSettingGetNextValue(mod_id..".crosshair_a") or 1);
     GameSetPostFxParameter("paused", 0, 0, 0, 0)
+    GameSetPostFxParameter("VIRTUAL_RESOLUTION",
+                           tonumber(MagicNumbersGetValue("VIRTUAL_RESOLUTION_X")) or 427.0,
+                           tonumber(MagicNumbersGetValue("VIRTUAL_RESOLUTION_Y")) or 242.0,
+                           0,
+                           0)
 end
 
 local biomes_all_xml = ModTextFileGetContent("data/biome/_biomes_all.xml")
@@ -59,13 +71,14 @@ function clear_pixel_scene_backgrounds(filename)
             clear_buffered_pixel_scenes_backgrounds(spliced)
             ModTextFileSetContent(file:text(), tostring(spliced))
         end
-
-        for background_images in pixel_scene_file:each_of("BackgroundImages") do
-            pixel_scene_file:remove(background_images)
-        end
-
-        clear_buffered_pixel_scenes_backgrounds(pixel_scene_file)
     end
+
+    for background_images in pixel_scenes:each_of("BackgroundImages") do
+        background_images:clear_children()
+    end
+
+    clear_buffered_pixel_scenes_backgrounds(pixel_scenes)
+
     ModTextFileSetContent(filename, tostring(pixel_scenes))
 end
 
@@ -156,95 +169,100 @@ function OnWorldPostUpdate()
 
     local sensitivity = (ModSettingGet(mod_id..".sensitivity") or 1.0)*math.pi
 
-    if GameGetIsGamepadConnected() then
-        local aim_x, aim_y = ComponentGetValueVector2(controls_component, "mAimingVectorNonZeroLatest")
-        local aim_dir_x, aim_dir_y = vec_normalize(aim_x, aim_y)
-        if aim_dir_x == 0 and aim_dir_y == 0 then
-            aim_dir_x = 1
+    if controls_component ~= nil then
+        if GameGetIsGamepadConnected() then
+            local aim_x, aim_y = ComponentGetValueVector2(controls_component, "mAimingVectorNonZeroLatest")
+            local aim_dir_x, aim_dir_y = vec_normalize(aim_x, aim_y)
+            if aim_dir_x == 0 and aim_dir_y == 0 then
+                aim_dir_x = 1
+            end
+            GameSetPostFxParameter("aim_dir", math.abs(aim_dir_x), -aim_dir_y, 0, clamp(6*aim_dir_x, -math.pi/2, math.pi/2))
+        else
+            local aim_x, aim_y = ComponentGetValueVector2(controls_component, "mAimingVector")
+            aim_x = aim_x*2.0/SCREEN_W
+            aim_y = aim_y*2.0/SCREEN_H
+            local aim_dir_x, aim_dir_y = vec_normalize(0.5*math.pi/sensitivity*SCREEN_W/SCREEN_H, -aim_y);
+            if aim_dir_x == 0 and aim_dir_y == 0 then
+                aim_dir_x = 1
+            end
+            GameSetPostFxParameter("aim_dir", aim_dir_x, aim_dir_y, 0, clamp(sensitivity*aim_x, -math.pi, math.pi))
         end
-        GameSetPostFxParameter("aim_dir", math.abs(aim_dir_x), -aim_dir_y, 0, clamp(6*aim_dir_x, -math.pi/2, math.pi/2))
-    else
-        local aim_x, aim_y = ComponentGetValueVector2(controls_component, "mAimingVector")
-        aim_x = aim_x*2.0/SCREEN_W
-        aim_y = aim_y*2.0/SCREEN_H
-        local aim_dir_x, aim_dir_y = vec_normalize(0.5*math.pi/sensitivity*SCREEN_W/SCREEN_H, -aim_y);
-        if aim_dir_x == 0 and aim_dir_y == 0 then
-            aim_dir_x = 1
+
+        local aim_raw_x, aim_raw_y = ComponentGetValueVector2(controls_component, "mAimingVectorNormalized")
+        aim_raw_x, aim_raw_y = vec_normalize(aim_raw_x, aim_raw_y)
+        if aim_raw_x == 0 and aim_raw_y == 0 then
+            aim_raw_x = 1
         end
-        GameSetPostFxParameter("aim_dir", aim_dir_x, aim_dir_y, 0, clamp(sensitivity*aim_x, -math.pi, math.pi))
-    end
+        GameSetPostFxParameter("aim_raw", aim_raw_x, -aim_raw_y, 0, 0)
 
-    local aim_raw_x, aim_raw_y = ComponentGetValueVector2(controls_component, "mAimingVectorNormalized")
-    aim_raw_x, aim_raw_y = vec_normalize(aim_raw_x, aim_raw_y)
-    if aim_raw_x == 0 and aim_raw_y == 0 then
-        aim_raw_x = 1
-    end
-    GameSetPostFxParameter("aim_raw", aim_raw_x, -aim_raw_y, 0, 0)
+        --NOTE: could probably get extra draw distance by putting the camera in the corner opposite to the one being looked at
+        --      then doing more jank to make the aim direction work out, but I don't feel like doing that
+        y = y-10
+        x = x+0;
 
-    y = y-10
-    x = x+0;
+        local platform_shooter_component = EntityGetFirstComponent(player, "PlatformShooterPlayerComponent")
 
-    local platform_shooter_component = EntityGetFirstComponent(player, "PlatformShooterPlayerComponent")
+        if platform_shooter_component ~= nil then
+            ComponentSetValue2(platform_shooter_component, "center_camera_on_this_entity", false)
+            ComponentSetValueVector2(platform_shooter_component, "mDesiredCameraPos", x, y)
+            GameSetCameraFree(false)
+        else
+            GameSetCameraPos(x, y)
+            GameSetCameraFree(true)
+        end
 
-    if platform_shooter_component ~= nil then
-        ComponentSetValue2(platform_shooter_component, "center_camera_on_this_entity", false)
-        ComponentSetValueVector2(platform_shooter_component, "mDesiredCameraPos", x, y)
-        GameSetCameraFree(false)
-    else
-        GameSetCameraPos(x, y)
-        GameSetCameraFree(true)
-    end
+        -- Set all sprites to be non-emissive
+        local entities = EntityGetInRadius(x, y, 0.7*SCREEN_W)
+        for i, e in ipairs(entities) do
+            local sprite_components = EntityGetComponent(e, "SpriteComponent")
+            if sprite_components ~= nil then
+                for i,sprite in ipairs(sprite_components) do
+                    if ComponentGetValue2(sprite, "emissive") then
+                        ComponentSetValue2(sprite, "emissive", false)
+                        EntityRefreshSprite(e, sprite)
+                    end
+                end
+            end
 
-    -- Set all sprites to be non-emissive
-    local entities = EntityGetInRadius(x, y, 0.7*SCREEN_W)
-    for i, e in ipairs(entities) do
-        local sprite_components = EntityGetComponent(e, "SpriteComponent")
-        if sprite_components ~= nil then
-            for i,sprite in ipairs(sprite_components) do
-                if ComponentGetValue2(sprite, "emissive") then
-                    ComponentSetValue2(sprite, "emissive", false)
-                    EntityRefreshSprite(e, sprite)
+            local particle_components = EntityGetComponent(e, "SpriteParticleEmitterComponent")
+            if particle_components ~= nil then
+                for i,sprite in ipairs(particle_components) do
+                    if ComponentGetValue2(sprite, "emissive") then
+                        ComponentSetValue2(sprite, "emissive", false)
+                    end
                 end
             end
         end
 
-        local particle_components = EntityGetComponent(e, "SpriteParticleEmitterComponent")
-        if particle_components ~= nil then
-            for i,sprite in ipairs(particle_components) do
-                if ComponentGetValue2(sprite, "emissive") then
-                    ComponentSetValue2(sprite, "emissive", false)
-                end
-            end
-        end
-    end
 
+        local inventory = EntityGetFirstComponent(player, "Inventory2Component")
+        local active_item = ComponentGetValue2( inventory, "mActiveItem" )
 
-    local inventory = EntityGetFirstComponent(player, "Inventory2Component")
-    local active_item = ComponentGetValue2( inventory, "mActiveItem" )
+        local min_alpha = 0.1
+        local alpha = clamp(math.abs(4*aim_raw_x), min_alpha, 1)
 
-    local min_alpha = 0.1
-    local alpha = clamp(math.abs(4*aim_raw_x), min_alpha, 1)
-
-    if active_item ~= nil then
-        local sprite_components = EntityGetComponent(active_item, "SpriteComponent")
-        if sprite_components ~= nil then
-            for i,sprite in ipairs(sprite_components) do
-                ComponentSetValue2(sprite, "alpha", alpha)
-            end
-        end
-    end
-
-    local children = EntityGetAllChildren(player)
-    for i,child in ipairs(children) do
-        if EntityGetName(child) == "arm_r" then
-            local sprite_components = EntityGetComponent(child, "SpriteComponent")
+        if active_item ~= nil then
+            local sprite_components = EntityGetComponent(active_item, "SpriteComponent")
             if sprite_components ~= nil then
                 for i,sprite in ipairs(sprite_components) do
                     ComponentSetValue2(sprite, "alpha", alpha)
                 end
             end
         end
+
+        local children = EntityGetAllChildren(player)
+        for i,child in ipairs(children) do
+            if EntityGetName(child) == "arm_r" then
+                local sprite_components = EntityGetComponent(child, "SpriteComponent")
+                if sprite_components ~= nil then
+                    for i,sprite in ipairs(sprite_components) do
+                        ComponentSetValue2(sprite, "alpha", alpha)
+                    end
+                end
+            end
+        end
     end
 end
 
---TODO: settings menu (add invert horizontal look)
+--TODO: normal view switch*, alt controls option*, all seeing eye warp effect*,
+--DONE: opacity improvments, fixed hiisi base entrance background, increased max thiccness with two C's, virtual resolution support,
